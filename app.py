@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os
 import requests
 
 st.set_page_config(page_title="GreenOps Agent Dashboard", layout="wide")
@@ -38,17 +39,34 @@ st.info(recommendation)
 # ------------------------
 st.subheader("4. Self-Healing Agent Events")
 
-agent_url = "http://greenops-selfheal.boutique.svc.cluster.local:8081/status"
+DEFAULT_AGENT_URL = "http://greenops-selfheal.boutique.svc.cluster.local:8081/status"
+AGENT_STATUS_URL = os.getenv("AGENT_STATUS_URL", DEFAULT_AGENT_URL)
 
-try:
-    response = requests.get(agent_url, timeout=5)
-    if response.status_code == 200:
-        events = response.json()
-        if events:
+
+@st.cache_data(ttl=15)
+def fetch_agent_events(url: str):
+    try:
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            return [data]
+        if isinstance(data, list):
+            return data
+        return [{"message": str(data)}]
+    except requests.RequestException as e:
+        return {"error": f"request_error: {e}"}
+    except Exception as e:
+        return {"error": f"parse_error: {e}"}
+
+
+events_resp = fetch_agent_events(AGENT_STATUS_URL)
+if isinstance(events_resp, dict) and "error" in events_resp:
+    st.warning(f"Could not reach Self-Healing Agent. {events_resp['error']}")
+else:
+    events = events_resp
+    if events:
+        if isinstance(events, list) and all(isinstance(e, dict) for e in events):
             st.table(events)
         else:
-            st.write("✅ No healing events yet.")
-    else:
-        st.error(f"Agent returned status: {response.status_code}")
-except Exception as e:
-    st.warning(f"Could not reach Self-Healing Agent. Error: {e}")
+            st.json(events)
