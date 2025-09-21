@@ -75,7 +75,8 @@ def main():
             end = datetime.utcnow().date()
             start = end - timedelta(days=6)
             if data_source == "BigQuery mock dataset":
-                bq = BigQueryClient(project=active_project, use_live=True, table=mock_table)
+                # Use mock mode for the mock dataset (do not attempt live BigQuery)
+                bq = BigQueryClient(project=active_project, use_live=False, table=mock_table)
                 df = bq.get_gke_costs_by_service(start.isoformat(), end.isoformat())
             else:
                 bq = BigQueryClient(project=active_project, use_live=True, table=live_table)

@@ -5,19 +5,33 @@ set -euo pipefail
 # Automated deploy script for GreenOps Agent (Cloud Run)
 # Run this in Cloud Shell or any environment with gcloud authenticated as a project admin.
 
-PROJECT="autogreenops"
-REGION="us-central1"
-IMAGE="gcr.io/${PROJECT}/greenops-agent"
-SERVICE="greenops-agent"
-SA_NAME="greenops-sa"
-SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
-LIVE_TABLE="autogreenops.billing_dataset.gcp_billing_export_resource_v1_018317_83DA9C_15D7B1"
-MOCK_TABLE="autogreenops.billing_dataset.mock_billing_data"
-# Optional behavior flags (set in the environment or export before running):
-# DELETE_BEFORE_DEPLOY=true   -> delete existing Cloud Run service before deploy
-# TEMP_DISABLE_PUBLIC=true   -> remove public access (allUsers) before deploy
-# RESTORE_PUBLIC=true        -> if TEMP_DISABLE_PUBLIC used, restore public after deploy
+# === Configuration: override these by exporting env vars before running ===
+# Example (Cloud Shell):
+# export GCP_PROJECT="autogreenops"; export DELETE_BEFORE_DEPLOY=true; bash ./scripts/deploy_cloud_run.sh
 
+# Primary project (GCP_PROJECT recommended). Falls back to 'autogreenops' if unset.
+GCP_PROJECT=${GCP_PROJECT:-"autogreenops"}
+PROJECT="${GCP_PROJECT}"
+
+# Region and service defaults
+REGION=${REGION:-"us-central1"}
+SERVICE=${SERVICE:-"greenops-agent"}
+
+# Container image (can override IMAGE env var if you want to push to a different registry)
+IMAGE=${IMAGE:-"gcr.io/${PROJECT}/greenops-agent"}
+
+# Service account settings
+SA_NAME=${SA_NAME:-"greenops-sa"}
+SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
+
+# Default BigQuery table paths (override with LIVE_TABLE / MOCK_TABLE env vars as needed)
+LIVE_TABLE=${LIVE_TABLE:-"${PROJECT}.billing_dataset.gcp_billing_export_resource_v1_018317_83DA9C_15D7B1"}
+MOCK_TABLE=${MOCK_TABLE:-"${PROJECT}.billing_dataset.mock_billing_data"}
+
+# Optional behavior flags (set to "true"/"false"). Default: safe (false).
+# DELETE_BEFORE_DEPLOY=true    -> delete existing Cloud Run service before deploy
+# TEMP_DISABLE_PUBLIC=true    -> remove public allUsers invoker before deploy
+# RESTORE_PUBLIC=true         -> if TEMP_DISABLE_PUBLIC used, restore public after deploy
 DELETE_BEFORE_DEPLOY=${DELETE_BEFORE_DEPLOY:-"false"}
 TEMP_DISABLE_PUBLIC=${TEMP_DISABLE_PUBLIC:-"false"}
 RESTORE_PUBLIC=${RESTORE_PUBLIC:-"false"}
