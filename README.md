@@ -13,7 +13,7 @@ Environment
 Run
 
 ```powershell
-set GCP_PROJECT=your-project-id; \
+set GCP_PROJECT=autogreenops; \
 streamlit run app.py
 ```
 
