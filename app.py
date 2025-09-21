@@ -1,72 +1,67 @@
+import os
+import json
+from datetime import datetime, timedelta
+
 import streamlit as st
 import pandas as pd
-import os
-import requests
 
-st.set_page_config(page_title="GreenOps Agent Dashboard", layout="wide")
-st.title("🌱 GreenOps Agent Dashboard")
-
-# ------------------------
-# Section 1: Cost Chart (mocked)
-# ------------------------
-cost_data = pd.DataFrame({
-    "service": ["frontend", "cartservice", "recommendationservice"],
-    "cost": [12.3, 7.8, 4.5]
-})
-st.subheader("1. GKE Cost (Last 7 days)")
-st.bar_chart(cost_data.set_index("service"))
-
-# ------------------------
-# Section 2: Carbon Footprint (mocked)
-# ------------------------
-st.subheader("2. Carbon Footprint Data")
-carbon_data = {
-    "region": "us-central1",
-    "co2_kg": 2.8,
-    "note": "This is mock data for demo purposes."
-}
-st.json(carbon_data)
-
-# ------------------------
-# Section 3: Gemini Recommendation (mocked)
-# ------------------------
-st.subheader("3. Gemini Recommendation")
-recommendation = "Consider scaling down idle services at night to save costs and reduce CO₂."
-st.info(recommendation)
-
-# ------------------------
-# Section 4: Self-Healing Agent Events
-# ------------------------
-st.subheader("4. Self-Healing Agent Events")
-
-DEFAULT_AGENT_URL = "http://greenops-selfheal.boutique.svc.cluster.local:8081/status"
-AGENT_STATUS_URL = os.getenv("AGENT_STATUS_URL", DEFAULT_AGENT_URL)
+from lib.bigquery_client import BigQueryClient
+from lib.carbon_api import CarbonAPI
+from lib.vertex_gen import VertexGen
 
 
-@st.cache_data(ttl=15)
-def fetch_agent_events(url: str):
-    try:
-        r = requests.get(url, timeout=5)
-        r.raise_for_status()
-        data = r.json()
-        if isinstance(data, dict):
-            return [data]
-        if isinstance(data, list):
-            return data
-        return [{"message": str(data)}]
-    except requests.RequestException as e:
-        return {"error": f"request_error: {e}"}
-    except Exception as e:
-        return {"error": f"parse_error: {e}"}
+st.set_page_config(page_title="GreenOps Agent", layout="wide")
 
 
-events_resp = fetch_agent_events(AGENT_STATUS_URL)
-if isinstance(events_resp, dict) and "error" in events_resp:
-    st.warning(f"Could not reach Self-Healing Agent. {events_resp['error']}")
-else:
-    events = events_resp
-    if events:
-        if isinstance(events, list) and all(isinstance(e, dict) for e in events):
-            st.table(events)
-        else:
-            st.json(events)
+def load_data():
+    # Query last 7 days of GKE costs by service
+    project = os.getenv("GCP_PROJECT") or "demo-project"
+    bq = BigQueryClient(project=project)
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=6)
+    df = bq.get_gke_costs_by_service(start.isoformat(), end.isoformat())
+    return df
+
+
+def main():
+    st.title("GreenOps Agent — GKE Cost & Carbon Insights")
+
+    st.sidebar.header("Settings")
+    use_mock = st.sidebar.checkbox("Use mocks for external APIs", value=True)
+
+    st.sidebar.markdown("Environment: \n- GCP_PROJECT: `{}`".format(os.getenv("GCP_PROJECT", "demo-project")))
+
+    with st.spinner("Querying BigQuery for costs..."):
+        df = load_data()
+
+    st.header("Costs (last 7 days)")
+    if df.empty:
+        st.info("No cost data returned for the selected date range.")
+    else:
+        st.plotly_chart(
+            pd.DataFrame(df).groupby("service")["cost"].sum().sort_values(ascending=False).reset_index().pipe(
+                lambda d: d.rename(columns={"service": "Service", "cost": "Total Cost USD"})
+            ).set_index("Service").T.pipe(lambda d: d), use_container_width=True
+        )
+
+        st.dataframe(df)
+
+    st.header("Carbon Footprint Estimates")
+    carbon_api = CarbonAPI(use_mock=use_mock)
+    with st.spinner("Estimating carbon footprint..."):
+        footprint = carbon_api.estimate_from_costs(df.to_dict(orient="records"))
+
+    st.json(footprint)
+
+    st.header("Gemini Recommendations")
+    vg = VertexGen(use_mock=use_mock)
+    prompt = "Provide optimization recommendations for the following costs and carbon footprint: \n" + json.dumps({"costs": df.to_dict(orient="records"), "footprint": footprint}, indent=2)
+    with st.spinner("Generating recommendations via Gemini..."):
+        rec = vg.generate_recommendations(prompt)
+
+    st.subheader("Recommendation")
+    st.markdown(rec.get("recommendation_markdown", "No recommendation returned."))
+
+
+if __name__ == "__main__":
+    main()
