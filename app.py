@@ -1,9 +1,6 @@
 import os
 import json
 from datetime import datetime, timedelta
-import os
-import json
-from datetime import datetime, timedelta
 
 import streamlit as st
 import pandas as pd
@@ -31,28 +28,45 @@ def main():
     st.title("GreenOps Agent — GKE Cost & Carbon Insights")
 
     st.sidebar.header("Settings")
-    use_mock = st.sidebar.checkbox("Use mocks for external APIs", value=True)
+    data_source = st.sidebar.selectbox(
+        "Data source",
+        [
+            "Local mock",
+            "BigQuery mock dataset",
+            "BigQuery live dataset",
+        ],
+        index=0,
+    )
+    use_mock = data_source == "Local mock"
+
+    # Table names (can come from environment variables or the sidebar selection)
+    live_table = os.getenv("LIVE_BQ_TABLE") or "autogreenops.billing_dataset.gcp_billing_export_resource_v1_018317_83DA9C_15D7B1"
+    mock_table = os.getenv("MOCK_BQ_TABLE") or "autogreenops.billing_dataset.mock_billing_data"
+
+    st.sidebar.markdown(f"Selected data source: **{data_source}**")
 
     st.sidebar.markdown("Environment: \n- GCP_PROJECT: `{}`".format(os.getenv("GCP_PROJECT", "demo-project")))
 
     with st.spinner("Querying BigQuery for costs..."):
         try:
-            # If use_mock is False, attempt live BigQuery
-            if not use_mock:
-                bq = BigQueryClient(project=os.getenv("GCP_PROJECT") or "demo-project", use_live=True)
-                end = datetime.utcnow().date()
-                start = end - timedelta(days=6)
+            end = datetime.utcnow().date()
+            start = end - timedelta(days=6)
+            if data_source == "Local mock":
+                df = load_data()
+            elif data_source == "BigQuery mock dataset":
+                bq = BigQueryClient(project=os.getenv("GCP_PROJECT") or "autogreen", use_live=True, table=mock_table)
                 df = bq.get_gke_costs_by_service(start.isoformat(), end.isoformat())
             else:
-                df = load_data()
+                bq = BigQueryClient(project=os.getenv("GCP_PROJECT") or "autogreen", use_live=True, table=live_table)
+                df = bq.get_gke_costs_by_service(start.isoformat(), end.isoformat())
         except Exception as e:
             st.error(
-                "BigQuery live fetch failed: {}\n\nIf you intended to use live data, make sure:\n"
+                "BigQuery fetch failed: {}\n\nIf you intended to use live data, make sure:\n"
                 "1) BigQuery API is enabled for your project.\n"
-                "2) The billing export table exists and the table path in `lib/bigquery_client.py` matches your export.\n"
+                "2) The billing export table exists and the table path is correct.\n"
                 "3) The service account running this app has permission to read BigQuery.\n"
                 "4) For Cloud Run/Compute, provide credentials via Workload Identity or set GOOGLE_APPLICATION_CREDENTIALS.\n\n"
-                "You can switch back to mock data by re-enabling 'Use mocks for external APIs' in the sidebar.",
+                "You can switch to a different data source in the sidebar.",
                 icon="🚫",
             )
             st.exception(e)
