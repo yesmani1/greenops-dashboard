@@ -97,6 +97,14 @@ else
   echo "No local key found at ${KEY_SRC}; building without baking credentials into the image."
 fi
 
+# Sanity check: ensure a Dockerfile exists in the build context. Cloud Build will
+# fail with "Dockerfile required" if it's missing or you're in the wrong folder.
+if [ ! -f Dockerfile ]; then
+  echo "ERROR: Dockerfile not found in $(pwd). Please run this script from the repository root where the Dockerfile lives or create a Dockerfile."
+  echo "Current directory listing:"; ls -la
+  exit 1
+fi
+
 gcloud builds submit --tag "${IMAGE}" .
 
 echo "7) Deploy to Cloud Run using service account ${SA_EMAIL}"
