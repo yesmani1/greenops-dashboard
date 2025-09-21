@@ -78,6 +78,25 @@ gcloud projects add-iam-policy-binding "${PROJECT}" --member="user:${CURRENT_ACC
 gcloud projects add-iam-policy-binding "${PROJECT}" --member="user:${CURRENT_ACCOUNT}" --role="roles/iam.serviceAccountUser" || true
 
 echo "6) Build and push container with Cloud Build"
+
+# Optionally bake a local service account key into the image (INSECURE).
+# Set KEY_SRC to the path of your local JSON key file to include it in the image.
+# Example: export KEY_SRC="/home/nandhaji/GreenOps_Agent/greenops-sa-key.json"
+KEY_SRC=${KEY_SRC:-"/home/nandhaji/GreenOps_Agent/greenops-sa-key.json"}
+KEY_DST_NAME=${KEY_DST_NAME:-"greenops-sa-key.json"}
+INCLUDE_KEY_IN_IMAGE=false
+
+if [ -f "${KEY_SRC}" ]; then
+  echo "Including service account key from ${KEY_SRC} into build context as ${KEY_DST_NAME} (will be removed after build)."
+  cp "${KEY_SRC}" "./${KEY_DST_NAME}"
+  chmod 600 "./${KEY_DST_NAME}"
+  INCLUDE_KEY_IN_IMAGE=true
+  # ensure cleanup on exit
+  trap 'rm -f "./${KEY_DST_NAME}"' EXIT
+else
+  echo "No local key found at ${KEY_SRC}; building without baking credentials into the image."
+fi
+
 gcloud builds submit --tag "${IMAGE}" .
 
 echo "7) Deploy to Cloud Run using service account ${SA_EMAIL}"
@@ -93,13 +112,21 @@ if [ "${DELETE_BEFORE_DEPLOY}" = "true" ]; then
   fi
 fi
 
+# Build env var string for deployment; include credentials path if key was baked in
+DEPLOY_ENV_VARS="GCP_PROJECT=${PROJECT},LIVE_BQ_TABLE=${LIVE_TABLE},MOCK_BQ_TABLE=${MOCK_TABLE}"
+if [ "${INCLUDE_KEY_IN_IMAGE}" = true ] || [ "${INCLUDE_KEY_IN_IMAGE}" = "true" ]; then
+  DEPLOY_ENV_VARS=",GOOGLE_APPLICATION_CREDENTIALS=/app/${KEY_DST_NAME},${DEPLOY_ENV_VARS}"
+  # Ensure GOOGLE_APPLICATION_CREDENTIALS is first so it's available during startup
+  DEPLOY_ENV_VARS="GOOGLE_APPLICATION_CREDENTIALS=/app/${KEY_DST_NAME},${DEPLOY_ENV_VARS#*,}"
+fi
+
 gcloud run deploy "${SERVICE}" \
   --image "${IMAGE}" \
   --platform managed \
   --region "${REGION}" \
   --allow-unauthenticated \
   --service-account "${SA_EMAIL}" \
-  --set-env-vars "GCP_PROJECT=${PROJECT},LIVE_BQ_TABLE=${LIVE_TABLE},MOCK_BQ_TABLE=${MOCK_TABLE}"
+  --set-env-vars "${DEPLOY_ENV_VARS}"
 
 # Optionally restore public access after deploy
 if [ "${TEMP_DISABLE_PUBLIC}" = "true" ] && [ "${RESTORE_PUBLIC}" = "true" ]; then
