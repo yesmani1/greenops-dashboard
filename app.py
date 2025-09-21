@@ -56,12 +56,17 @@ def main():
             if data_source == "BigQuery live dataset":
                 bq_test = BigQueryClient(project=active_project, use_live=True, table=live_table)
             else:
-                bq_test = BigQueryClient(project=active_project, use_live=True, table=mock_table)
-            ok, msg = bq_test.test_table_connection()
-            if ok:
-                st.sidebar.success("Connection OK: " + msg)
+                # For the mock dataset we don't need to hit live BigQuery
+                bq_test = BigQueryClient(project=active_project, use_live=False, table=mock_table)
+
+            if not hasattr(bq_test, "test_table_connection"):
+                st.sidebar.error("Connection test not available: BigQuery client missing test_table_connection()")
             else:
-                st.sidebar.error("Connection failed: " + msg)
+                ok, msg = bq_test.test_table_connection()
+                if ok:
+                    st.sidebar.success("Connection OK: " + msg)
+                else:
+                    st.sidebar.error("Connection failed: " + msg)
         except Exception as e:
             st.sidebar.error(f"Connection test error: {e}")
 
@@ -87,27 +92,34 @@ def main():
             df = None
 
     st.header("Costs (last 7 days)")
-    if df.empty:
-        st.info("No cost data returned for the selected date range.")
+    if df is None:
+        st.error("No data: BigQuery query failed earlier. Use 'Test connection' in the sidebar for diagnostics.")
     else:
-        st.plotly_chart(
-            pd.DataFrame(df).groupby("service")["cost"].sum().sort_values(ascending=False).reset_index().pipe(
-                lambda d: d.rename(columns={"service": "Service", "cost": "Total Cost USD"})
-            ).set_index("Service").T.pipe(lambda d: d), use_container_width=True
-        )
+        if df.empty:
+            st.info("No cost data returned for the selected date range.")
+        else:
+            st.plotly_chart(
+                pd.DataFrame(df).groupby("service")["cost"].sum().sort_values(ascending=False).reset_index().pipe(
+                    lambda d: d.rename(columns={"service": "Service", "cost": "Total Cost USD"})
+                ).set_index("Service").T.pipe(lambda d: d), use_container_width=True
+            )
 
-        st.dataframe(df)
+            st.dataframe(df)
 
     st.header("Carbon Footprint Estimates")
     carbon_api = CarbonAPI(use_mock=(data_source == "BigQuery mock dataset"))
     with st.spinner("Estimating carbon footprint..."):
-        footprint = carbon_api.estimate_from_costs(df.to_dict(orient="records"))
+        try:
+            costs_records = df.to_dict(orient="records") if df is not None else []
+        except Exception:
+            costs_records = []
+        footprint = carbon_api.estimate_from_costs(costs_records)
 
     st.json(footprint)
 
     st.header("Gemini Recommendations")
     vg = VertexGen(use_mock=(data_source == "BigQuery mock dataset"))
-    prompt = "Provide optimization recommendations for the following costs and carbon footprint: \n" + json.dumps({"costs": df.to_dict(orient="records"), "footprint": footprint}, indent=2)
+    prompt = "Provide optimization recommendations for the following costs and carbon footprint: \n" + json.dumps({"costs": costs_records, "footprint": footprint}, indent=2)
     with st.spinner("Generating recommendations via Gemini..."):
         rec = vg.generate_recommendations(prompt)
 
