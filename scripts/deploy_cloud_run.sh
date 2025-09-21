@@ -136,36 +136,99 @@ else
   cat /tmp/bq_test.json
 fi
 
-# 6) Build container image using Cloud Build
 echo "Building container image ${IMAGE_NAME} with Cloud Build"
-# Use Cloud Build to push to Artifact Registry / Container Registry
+gcloud builds submit --tag "$IMAGE_NAME" .
+echo "Deploying to Cloud Run: $SERVICE_NAME"
+gcloud run deploy "$SERVICE_NAME" \
+# 6) Advanced build & deploy (Artifact Registry + Workload Identity + Secret Manager)
+ARTIFACT_REPO_NAME=${ARTIFACT_REPO_NAME:-greenops-repo}
+ARTIFACT_LOCATION=${ARTIFACT_LOCATION:-$REGION}
+
+echo "Preparing Artifact Registry repository: ${ARTIFACT_REPO_NAME} in ${ARTIFACT_LOCATION}"
+if ! gcloud artifacts repositories list --location="$ARTIFACT_LOCATION" --project="$PROJECT_ID" --format="value(name)" | grep -x "$ARTIFACT_REPO_NAME" >/dev/null 2>&1; then
+  echo "Creating Artifact Registry repository $ARTIFACT_REPO_NAME"
+  gcloud artifacts repositories create "$ARTIFACT_REPO_NAME" --repository-format=docker --location="$ARTIFACT_LOCATION" --project="$PROJECT_ID" || true
+else
+  echo "Artifact Registry repo $ARTIFACT_REPO_NAME already exists"
+fi
+
+# Use Artifact Registry image name
+IMAGE_NAME="${ARTIFACT_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPO_NAME}/${SERVICE_NAME}:latest"
+
+echo "Image will be: $IMAGE_NAME"
+
+# 7) Ensure service account exists and grant roles
+SA_EMAIL=${SA_EMAIL:-}
+if [ -z "$SA_EMAIL" ]; then
+  SA_EMAIL="greenops-run-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+fi
+
+if ! gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  echo "Creating service account $SA_EMAIL"
+  gcloud iam service-accounts create "$(echo "$SA_EMAIL" | cut -d@ -f1)" --display-name="GreenOps Run SA" --project="$PROJECT_ID"
+fi
+
+echo "Granting minimal roles to $SA_EMAIL"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/bigquery.dataViewer" || true
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/aiplatform.user" || true
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/secretmanager.secretAccessor" || true
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/logging.logWriter" || true
+
+# 8) If CARBON_API_KEY present, create/refresh Secret Manager secret
+SECRET_NAME=""
+if [ -n "${CARBON_API_KEY:-}" ]; then
+  SECRET_NAME=greenops-carbon-key
+  if ! gcloud secrets describe "$SECRET_NAME" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo "Creating secret $SECRET_NAME in Secret Manager"
+    printf '%s' "$CARBON_API_KEY" | gcloud secrets create "$SECRET_NAME" --data-file=- --project="$PROJECT_ID"
+  else
+    echo "Adding new secret version for $SECRET_NAME"
+    printf '%s' "$CARBON_API_KEY" | gcloud secrets versions add "$SECRET_NAME" --data-file=- --project="$PROJECT_ID"
+  fi
+
+  # Grant access to SA
+  gcloud secrets add-iam-policy-binding "$SECRET_NAME" --member="serviceAccount:${SA_EMAIL}" --role="roles/secretmanager.secretAccessor" --project="$PROJECT_ID" || true
+fi
+
+# 9) Build image with Cloud Build and push to Artifact Registry
+echo "Building and pushing image to Artifact Registry: $IMAGE_NAME"
+#gcloud builds submit supports Artifact Registry tags
 gcloud builds submit --tag "$IMAGE_NAME" .
 
-# 7) Delete existing Cloud Run service (if exists)
+# 10) Delete existing Cloud Run service (if exists)
 EXISTING=$(gcloud run services list --platform=managed --region="$CLOUD_RUN_REGION" --format="value(metadata.name)" --project="$PROJECT_ID" | grep -x "$SERVICE_NAME" || true)
 if [ -n "$EXISTING" ]; then
   echo "Deleting existing Cloud Run service: $SERVICE_NAME"
   gcloud run services delete "$SERVICE_NAME" --region="$CLOUD_RUN_REGION" --quiet --project="$PROJECT_ID"
 fi
 
-# 8) Deploy to Cloud Run
-echo "Deploying to Cloud Run: $SERVICE_NAME"
-# Common runtime env vars to pass (we will pass the path to credentials via Secret Manager or mount if needed)
-# For this script we pass minimal environment variables; for production store secrets in Secret Manager
-gcloud run deploy "$SERVICE_NAME" \
-  --image "$IMAGE_NAME" \
-  --region "$CLOUD_RUN_REGION" \
-  --platform managed \
-  --allow-unauthenticated \
-  --set-env-vars "PROJECT_ID=${PROJECT_ID},REGION=${REGION},BILLING_TABLE=${BILLING_TABLE},VERTEX_MODEL_ID=${VERTEX_MODEL_ID},STREAMLIT_PORT=8080" \
-  --port 8080 \
-  --project "$PROJECT_ID"
+# 11) Deploy to Cloud Run with service account and secret injection (Workload Identity recommended)
+echo "Deploying $SERVICE_NAME to Cloud Run with service account ${SA_EMAIL}"
+DEPLOY_CMD=(gcloud run deploy "$SERVICE_NAME"
+  --image "$IMAGE_NAME"
+  --region "$CLOUD_RUN_REGION"
+  --platform managed
+  --service-account "$SA_EMAIL"
+  --allow-unauthenticated
+  --set-env-vars "PROJECT_ID=${PROJECT_ID},REGION=${REGION},BILLING_TABLE=${BILLING_TABLE},VERTEX_MODEL_ID=${VERTEX_MODEL_ID},STREAMLIT_PORT=8080"
+  --port 8080
+  --project "$PROJECT_ID")
 
-# 9) Post-deploy info
+if [ -n "$SECRET_NAME" ]; then
+  # Inject secret as environment variable CARBON_API_KEY
+  DEPLOY_CMD+=(--update-secrets "CARBON_API_KEY=${SECRET_NAME}:latest")
+fi
+
+"${DEPLOY_CMD[@]}"
+
+# 12) Post-deploy info
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" --region="$CLOUD_RUN_REGION" --platform=managed --format="value(status.url)" --project="$PROJECT_ID")
 
 echo "Deployment completed. Service URL: $SERVICE_URL"
+echo "Service is running as service account: $SA_EMAIL"
 
-echo "Note: For the service to access BigQuery and Vertex APIs, configure Workload Identity or mount credentials via Secret Manager and set GOOGLE_APPLICATION_CREDENTIALS accordingly."
+echo "Security notes:"
+echo " - Workload Identity is used by setting the Cloud Run service account. Avoid mounting key files in production."
+echo " - CARBON_API_KEY (if provided) is stored in Secret Manager and injected at runtime; do not store secrets in source control."
 
 echo "Done."
