@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from datetime import datetime
 
 import pandas as pd
@@ -125,3 +125,24 @@ class BigQueryClient:
                         if "cost" not in df.columns:
                             df["cost"] = 0.0
                         return df[["date", "service", "cost"]]
+
+                    def test_table_connection(self) -> Tuple[bool, str]:
+                        """Run a lightweight query against the configured table to test connectivity.
+
+                        Returns (success: bool, message: str).
+                        """
+                        if not self.use_live:
+                            return False, "Client not configured for live BigQuery queries (use_live=False)"
+                        if not self._client:
+                            return False, "BigQuery client not initialized"
+
+                        table_ref = self.table or f"{self.project}.billing.gke_billing_export"
+                        # lightweight check
+                        query = f"SELECT COUNT(1) AS cnt FROM `{table_ref}` LIMIT 1"
+                        try:
+                            job = self._client.query(query)
+                            df = job.to_dataframe()
+                            cnt = int(df.iloc[0]["cnt"]) if not df.empty else 0
+                            return True, f"OK, table accessible (sample rows: {cnt})"
+                        except Exception as e:
+                            return False, str(e)
