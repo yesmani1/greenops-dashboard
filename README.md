@@ -49,3 +49,14 @@ Enable live BigQuery data (step-by-step)
 	- In the app sidebar uncheck `Use mocks for external APIs` to let the dashboard attempt live BigQuery queries.
 
 If you see an error similar to "BigQuery query failed: ... The project X has not enabled BigQuery", enable the BigQuery API from the Cloud Console and verify the `GCP_PROJECT` environment variable is set correctly for the app runtime.
+
+Automated deploy script
+-----------------------
+There is a helper script at `scripts/deploy_cloud_run.sh` that an admin can run from Cloud Shell to enable required APIs, create the service account, grant roles, build the container image, and deploy the app to Cloud Run. Typical usage (run as a project admin):
+
+```powershell
+# From repo root in Cloud Shell (admin account)
+chmod +x scripts/deploy_cloud_run.sh; ./scripts/deploy_cloud_run.sh
+```
+
+If your organization blocks enabling APIs via scripts, ask an org owner to either run the script or enable the following APIs manually in the Cloud Console before deploying: `artifactregistry.googleapis.com`, `cloudbuild.googleapis.com`, `run.googleapis.com`, `bigquery.googleapis.com`, and `storage.googleapis.com`.
