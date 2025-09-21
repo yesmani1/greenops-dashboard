@@ -19,3 +19,33 @@ streamlit run app.py
 
 Notes
 - By default the app uses mocked data for BigQuery, Carbon API, and Vertex unless the relevant SDKs and credentials are available.
+
+Enable live BigQuery data (step-by-step)
+
+1) Enable BigQuery API and export
+	- In the Google Cloud Console, enable the BigQuery API for your project.
+	- Make sure you have exported billing data to a BigQuery dataset/table or have another table with GKE usage/costs. The current SQL in `lib/bigquery_client.py` assumes a table at `<PROJECT>.billing.gke_billing_export`. Update the table path in that file if your export path is different.
+
+2) Create and grant a service account (for VM/Cloud Run)
+	- Create a service account: `gcloud iam service-accounts create greenops-sa --project YOUR_PROJECT`
+	- Grant it BigQuery Data Viewer and BigQuery Job User roles, e.g.:
+	  ```powershell
+	  gcloud projects add-iam-policy-binding YOUR_PROJECT --member="serviceAccount:greenops-sa@YOUR_PROJECT.iam.gserviceaccount.com" --role="roles/bigquery.dataViewer"
+	  gcloud projects add-iam-policy-binding YOUR_PROJECT --member="serviceAccount:greenops-sa@YOUR_PROJECT.iam.gserviceaccount.com" --role="roles/bigquery.jobUser"
+	  ```
+	- Create a key (if running on a VM or locally):
+	  ```powershell
+	  gcloud iam service-accounts keys create key.json --iam-account=greenops-sa@YOUR_PROJECT.iam.gserviceaccount.com --project=YOUR_PROJECT
+	  ```
+
+3) Provide credentials to the app
+	- Locally or on a VM: set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to the JSON key file, then run `streamlit run app.py --server.port=8080 --server.address=0.0.0.0`.
+	  ```powershell
+	  $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\key.json"; streamlit run app.py --server.port=8080 --server.address=0.0.0.0 --server.enableCORS=false --server.enableXsrfProtection=false
+	  ```
+	- On Cloud Run: use Workload Identity or attach the service account to the Cloud Run service (recommended) so you don't need a key file.
+
+4) Switch the app to live mode
+	- In the app sidebar uncheck `Use mocks for external APIs` to let the dashboard attempt live BigQuery queries.
+
+If you see an error similar to "BigQuery query failed: ... The project X has not enabled BigQuery", enable the BigQuery API from the Cloud Console and verify the `GCP_PROJECT` environment variable is set correctly for the app runtime.
