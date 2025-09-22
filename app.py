@@ -12,8 +12,6 @@ from google.oauth2 import service_account
 import google.auth
 from google.auth.transport.requests import Request
 from google.cloud import aiplatform
-from vertexai.generative_models import GenerativeModel
-import vertexai
 from dotenv import load_dotenv
 
 # Load environment
@@ -114,56 +112,41 @@ def estimate_co2_from_cost(total_cost_usd: float) -> Dict[str, Any]:
     return {"estimated_kgCO2": estimated, "factor_kg_per_usd": EMISSION_FACTOR_KG_PER_USD}
 
 
+
+import google.generativeai as genai
+
 def generate_recommendations(prompt: str) -> str:
-    """Call Vertex AI Gemini using the proper SDK.
-    This function uses the google-cloud-aiplatform SDK for proper Gemini model access.
-    """
+    """Call Gemini using the Google GenAI SDK."""
     try:
-        # Initialize Vertex AI
-        vertexai.init(project=PROJECT_ID, location=REGION, credentials=credentials)
-        
-        # Candidate models: configured model first, then fallbacks
+        genai.configure(api_key=os.getenv("GENAI_API_KEY"))  # Set your API key
+
         candidate_models = [VERTEX_MODEL_ID, 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.0-pro']
-        
         last_error = None
+
         for model_name in candidate_models:
             if not model_name:
                 continue
-                
             try:
-                # Create the generative model
-                model = GenerativeModel(model_name)
-                
-                # Generate content
+                model = genai.GenerativeModel(model_name)
                 response = model.generate_content(prompt)
-                
-                # Check if response has content
                 if response.text:
-                    st.success(f"Vertex AI model succeeded with: {model_name}")
+                    st.success(f"GenAI model succeeded with: {model_name}")
                     return response.text
                 else:
                     st.warning(f"Model {model_name} returned empty response")
                     last_error = "Empty response"
-                    continue
-                    
             except Exception as e:
                 error_msg = str(e)
-                st.warning(f"Vertex AI model {model_name} failed: {error_msg}")
+                st.warning(f"GenAI model {model_name} failed: {error_msg}")
                 last_error = error_msg
-                
-                # If it's a model not found error, try next model
-                if "404" in error_msg or "not found" in error_msg.lower():
-                    continue
-                # If it's a different error, still try next model but log it
                 continue
-        
-        # If none succeeded
-        st.error("All candidate Vertex AI models failed. See messages above for details.")
+
+        st.error("All candidate GenAI models failed. See messages above for details.")
         return f"Error: All models failed. Last error: {last_error}"
-        
+
     except Exception as e:
-        st.error(f"Failed to initialize Vertex AI: {e}")
-        return f"Error: Failed to initialize Vertex AI: {e}"
+        st.error(f"Failed to initialize GenAI SDK: {e}")
+        return f"Error: Failed to initialize GenAI SDK: {e}"
 
 
 def get_access_token() -> str:
@@ -194,7 +177,7 @@ col1, col2 = st.columns([2, 1])
 # Display current Vertex model and quick hint
 st.sidebar.markdown('### Vertex AI model')
 st.sidebar.write(f"Model id: {VERTEX_MODEL_ID}")
-st.sidebar.caption('If you get 404s, update `VERTEX_MODEL_ID` in `env.config` to a valid publisher model (e.g., text-bison@001)')
+#st.sidebar.caption('If you get 404s, update `VERTEX_MODEL_ID` in `env.config` to a valid publisher model (e.g., text-bison@001)')
 
 with col1:
     st.header('Costs by project')
@@ -210,23 +193,6 @@ with col1:
         st.dataframe(df.head(200))
         fig = px.bar(df.groupby('service', as_index=False)['total_cost'].sum(), x='service', y='total_cost', title='Cost by service')
         st.plotly_chart(fig, use_container_width=True)
-
-with col2:
-    st.header('CO₂ Estimates')
-    if st.button('Estimate CO2 from costs'):
-        # Build simple payload from billing summary
-        df = st.session_state.get('billing_df')
-        if df is None:
-            st.warning('Please fetch billing data first')
-        else:
-            summary = df.groupby('project_id', as_index=False)['total_cost'].sum()
-            payload = {
-                "cost": summary['total_cost'].sum(),
-                "project": PROJECT_ID,
-            }
-            with st.spinner('Calling Carbon Footprint API...'):
-                carbon_resp = call_carbon_api(payload)
-                st.json(carbon_resp)
 
     st.header('AI Recommendations')
     prompt = st.text_area('Prompt for Gemini (or leave to auto-generate)', height=150)
@@ -246,6 +212,23 @@ with col2:
             with st.spinner('Calling Vertex AI Gemini...'):
                 rec = generate_recommendations(prompt)
                 st.code(rec)
+with col2:
+    st.header('CO₂ Estimates')
+    if st.button('Estimate CO2 from costs'):
+        # Build simple payload from billing summary
+        df = st.session_state.get('billing_df')
+        if df is None:
+            st.warning('Please fetch billing data first')
+        else:
+            summary = df.groupby('project_id', as_index=False)['total_cost'].sum()
+            payload = {
+                "cost": summary['total_cost'].sum(),
+                "project": PROJECT_ID,
+            }
+            with st.spinner('Calling Carbon Footprint API...'):
+                carbon_resp = call_carbon_api(payload)
+                st.json(carbon_resp)
+
 
 st.sidebar.title('Settings')
 st.sidebar.write(f'Project: {PROJECT_ID}')
