@@ -116,7 +116,12 @@ def generate_recommendations(prompt: str) -> str:
     This function uses the Vertex REST API endpoint. For production, use google-cloud-aiplatform.
     """
     # Build request
-    endpoint = f"{VERTEX_API_ENDPOINT}/v1/projects/{PROJECT_ID}/locations/{REGION}/publishers/google/models/{VERTEX_MODEL_ID}:predict"
+    def call_model(model_id: str) -> Dict[str, Any]:
+        url = f"{VERTEX_API_ENDPOINT}/v1/projects/{PROJECT_ID}/locations/{REGION}/publishers/google/models/{model_id}:predict"
+        return {'url': url}
+
+    # Candidate models: configured model first, then fallbacks
+    candidate_models = [VERTEX_MODEL_ID, 'gemini-2.5-pro', 'gemini-2.5-flash-lite', 'text-bison@001']
     # Note: this REST path may differ depending on model and API; in many cases you should use the google-cloud-aiplatform SDK
     headers = {
         'Content-Type': 'application/json'
@@ -129,27 +134,47 @@ def generate_recommendations(prompt: str) -> str:
     except Exception:
         pass
 
-    data = {
-        'instances': [
-            {'content': prompt}
-        ]
-    }
-    try:
-        r = requests.post(endpoint, headers=headers, json=data)
-        r.raise_for_status()
-        resp = r.json()
-        # Parse response - this is dependent on model
-        return json.dumps(resp, indent=2)
-    except requests.HTTPError as e:
-        st.error(f"Vertex AI call failed: {e} for url: {endpoint}")
+    data = {'instances':[{'content': prompt}]}
+
+    last_error = None
+    for model in candidate_models:
+        if not model:
+            continue
+        url = f"{VERTEX_API_ENDPOINT}/v1/projects/{PROJECT_ID}/locations/{REGION}/publishers/google/models/{model}:predict"
         try:
-            st.json(r.json())
-        except Exception:
-            pass
-        return ""
-    except Exception as e:
-        st.error(f"Vertex AI call failed: {e}")
-        return ""
+            r = requests.post(url, headers=headers, json=data)
+            # If model not found try next candidate
+            if r.status_code == 404:
+                try:
+                    body = r.json()
+                except Exception:
+                    body = r.text
+                st.info(f"Model {model} not found or inaccessible. Server response:")
+                st.json(body)
+                last_error = body
+                continue
+            r.raise_for_status()
+            resp = r.json()
+            st.success(f"Vertex model succeeded with: {model}")
+            return json.dumps(resp, indent=2)
+        except requests.HTTPError as e:
+            # Log body for diagnosis and try next
+            try:
+                resp_body = r.json()
+            except Exception:
+                resp_body = r.text if 'r' in locals() else str(e)
+            st.warning(f"Vertex model {model} failed: {e}")
+            st.json(resp_body)
+            last_error = resp_body
+            continue
+        except Exception as e:
+            st.warning(f"Vertex model {model} call error: {e}")
+            last_error = str(e)
+            continue
+
+    # If none succeeded
+    st.error("All candidate Vertex models failed. See responses above for details.")
+    return json.dumps({'error': last_error}, indent=2)
 
 
 def get_access_token() -> str:
