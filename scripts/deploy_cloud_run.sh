@@ -33,6 +33,8 @@ REQUIRED_APIS=(
   containerregistry.googleapis.com
   artifactregistry.googleapis.com
   bigquery.googleapis.com
+  secretmanager.googleapis.com
+  carbonfootprint.googleapis.com
   billingbudgets.googleapis.com
   cloudbilling.googleapis.com
   aiplatform.googleapis.com
@@ -71,10 +73,46 @@ if ! gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then
   exit 1
 fi
 
-# 3) Enable required APIs
+# 3) Enable required APIs (robust)
+enable_api() {
+  local api_name="$1"
+  local max_retries=10
+  local wait_seconds=3
+
+  echo "Ensuring API enabled: $api_name"
+
+  # Try to enable the API (may require permissions)
+  if ! gcloud services enable "$api_name" --project="$PROJECT_ID" 2>/tmp/enable_${api_name//./_}.err; then
+    echo "Warning: initial attempt to enable $api_name failed. See /tmp/enable_${api_name//./_}.err for details"
+  fi
+
+  # Poll until the API appears in the enabled list or we hit max_retries
+  local i=0
+  while [ $i -lt $max_retries ]; do
+    if gcloud services list --enabled --project="$PROJECT_ID" --filter="NAME:${api_name}" --format="value(NAME)" | grep -x "$api_name" >/dev/null 2>&1; then
+      echo "API enabled: $api_name"
+      return 0
+    fi
+    i=$((i+1))
+    echo "Waiting for $api_name to become enabled... (attempt $i/$max_retries)"
+    sleep $wait_seconds
+  done
+
+  # If we reach here the API is not enabled — fail with guidance
+  echo "ERROR: Could not enable API $api_name for project $PROJECT_ID after multiple attempts." >&2
+  echo "This is often caused by insufficient IAM permissions or organization policy restrictions." >&2
+  echo "Possible remedies:" >&2
+  echo " - Ensure you have permission to enable services (roles/serviceusage.serviceUsageAdmin or project owner)." >&2
+  echo " - Ask your org admin to enable the API for the project or organization." >&2
+  echo " - Manually enable in the Cloud Console: https://console.cloud.google.com/apis/library/$api_name?project=$PROJECT_ID" >&2
+  return 1
+}
+
 for api in "${REQUIRED_APIS[@]}"; do
-  echo "Ensuring API enabled: $api"
-  gcloud services enable "$api" --project="$PROJECT_ID" || true
+  if ! enable_api "$api"; then
+    echo "Failed enabling required API: $api" >&2
+    exit 1
+  fi
 done
 
 # 4) Validate service account file
