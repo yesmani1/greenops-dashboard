@@ -136,10 +136,7 @@ else
   cat /tmp/bq_test.json
 fi
 
-echo "Building container image ${IMAGE_NAME} with Cloud Build"
-gcloud builds submit --tag "$IMAGE_NAME" .
-echo "Deploying to Cloud Run: $SERVICE_NAME"
-gcloud run deploy "$SERVICE_NAME" \
+# proceed to advanced build & deploy (Artifact Registry + Workload Identity + Secret Manager)
 # 6) Advanced build & deploy (Artifact Registry + Workload Identity + Secret Manager)
 ARTIFACT_REPO_NAME=${ARTIFACT_REPO_NAME:-greenops-repo}
 ARTIFACT_LOCATION=${ARTIFACT_LOCATION:-$REGION}
