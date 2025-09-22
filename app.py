@@ -177,6 +177,11 @@ st.title('GreenOps Agent — Online Boutique')
 
 col1, col2 = st.columns([2, 1])
 
+# Display current Vertex model and quick hint
+st.sidebar.markdown('### Vertex AI model')
+st.sidebar.write(f"Model id: {VERTEX_MODEL_ID}")
+st.sidebar.caption('If you get 404s, update `VERTEX_MODEL_ID` in `env.config` to a valid publisher model (e.g., text-bison@001)')
+
 with col1:
     st.header('Costs by project')
     limit = st.number_input('Query limit', min_value=100, max_value=100000, value=1000, step=100)
