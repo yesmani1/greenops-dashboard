@@ -11,6 +11,9 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 import google.auth
 from google.auth.transport.requests import Request
+from google.cloud import aiplatform
+from vertexai.generative_models import GenerativeModel
+import vertexai
 from dotenv import load_dotenv
 
 # Load environment
@@ -112,69 +115,55 @@ def estimate_co2_from_cost(total_cost_usd: float) -> Dict[str, Any]:
 
 
 def generate_recommendations(prompt: str) -> str:
-    """Call Vertex AI text generation (Gemini) via REST.
-    This function uses the Vertex REST API endpoint. For production, use google-cloud-aiplatform.
+    """Call Vertex AI Gemini using the proper SDK.
+    This function uses the google-cloud-aiplatform SDK for proper Gemini model access.
     """
-    # Build request
-    def call_model(model_id: str) -> Dict[str, Any]:
-        url = f"{VERTEX_API_ENDPOINT}/v1/projects/{PROJECT_ID}/locations/{REGION}/publishers/google/models/{model_id}:predict"
-        return {'url': url}
-
-    # Candidate models: configured model first, then fallbacks
-    candidate_models = [VERTEX_MODEL_ID, 'gemini-2.5-pro', 'gemini-2.5-flash-lite', 'text-bison@001']
-    # Note: this REST path may differ depending on model and API; in many cases you should use the google-cloud-aiplatform SDK
-    headers = {
-        'Content-Type': 'application/json'
-    }
-    # Attach Authorization header using OAuth token (ADC or service account key)
     try:
-        token = get_access_token()
-        if token:
-            headers['Authorization'] = f"Bearer {token}"
-    except Exception:
-        pass
-
-    data = {'instances':[{'content': prompt}]}
-
-    last_error = None
-    for model in candidate_models:
-        if not model:
-            continue
-        url = f"{VERTEX_API_ENDPOINT}/v1/projects/{PROJECT_ID}/locations/{REGION}/publishers/google/models/{model}:predict"
-        try:
-            r = requests.post(url, headers=headers, json=data)
-            # If model not found try next candidate
-            if r.status_code == 404:
-                try:
-                    body = r.json()
-                except Exception:
-                    body = r.text
-                st.info(f"Model {model} not found or inaccessible. Server response:")
-                st.json(body)
-                last_error = body
+        # Initialize Vertex AI
+        vertexai.init(project=PROJECT_ID, location=REGION, credentials=credentials)
+        
+        # Candidate models: configured model first, then fallbacks
+        candidate_models = [VERTEX_MODEL_ID, 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.0-pro']
+        
+        last_error = None
+        for model_name in candidate_models:
+            if not model_name:
                 continue
-            r.raise_for_status()
-            resp = r.json()
-            st.success(f"Vertex model succeeded with: {model}")
-            return json.dumps(resp, indent=2)
-        except requests.HTTPError as e:
-            # Log body for diagnosis and try next
+                
             try:
-                resp_body = r.json()
-            except Exception:
-                resp_body = r.text if 'r' in locals() else str(e)
-            st.warning(f"Vertex model {model} failed: {e}")
-            st.json(resp_body)
-            last_error = resp_body
-            continue
-        except Exception as e:
-            st.warning(f"Vertex model {model} call error: {e}")
-            last_error = str(e)
-            continue
-
-    # If none succeeded
-    st.error("All candidate Vertex models failed. See responses above for details.")
-    return json.dumps({'error': last_error}, indent=2)
+                # Create the generative model
+                model = GenerativeModel(model_name)
+                
+                # Generate content
+                response = model.generate_content(prompt)
+                
+                # Check if response has content
+                if response.text:
+                    st.success(f"Vertex AI model succeeded with: {model_name}")
+                    return response.text
+                else:
+                    st.warning(f"Model {model_name} returned empty response")
+                    last_error = "Empty response"
+                    continue
+                    
+            except Exception as e:
+                error_msg = str(e)
+                st.warning(f"Vertex AI model {model_name} failed: {error_msg}")
+                last_error = error_msg
+                
+                # If it's a model not found error, try next model
+                if "404" in error_msg or "not found" in error_msg.lower():
+                    continue
+                # If it's a different error, still try next model but log it
+                continue
+        
+        # If none succeeded
+        st.error("All candidate Vertex AI models failed. See messages above for details.")
+        return f"Error: All models failed. Last error: {last_error}"
+        
+    except Exception as e:
+        st.error(f"Failed to initialize Vertex AI: {e}")
+        return f"Error: Failed to initialize Vertex AI: {e}"
 
 
 def get_access_token() -> str:
